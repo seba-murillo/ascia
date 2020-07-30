@@ -24,6 +24,7 @@
 #define MIN_BLOCKSIZE 1024 // 1 KB
 #define MIN_FILESIZE 10240 // 10 Kb
 #define MAX_FILENAME 256
+#define MAX_SAFE_METAPARTS 100
 
 //#define verbose
 
@@ -48,10 +49,12 @@ int main(int argc, char** argv){
 			exit(EXIT_FAILURE);
 		}
 		split(argv[2], (uint32_t) block_size);
-	}else if(strcmp(argv[1], "join") == 0){
+	}
+	else if(strcmp(argv[1], "join") == 0){
 		if(argc != 3) show_syntax();
 		join(argv[2]);
-	}else show_syntax();
+	}
+	else show_syntax();
 	return EXIT_SUCCESS;
 }
 
@@ -79,15 +82,33 @@ void split(const char* filename, uint32_t block_size){
 	strcpy(meta.MD5, get_MD5(filename));
 #ifdef verbose
 	printf("> splitting: %s\n", filename);
-	printf(TAB "%-20s%lu\n", "file size:", size);
 	printf(TAB "%-20s%s\n", "file MD5:", meta.MD5);
-	printf(TAB "%-20s%u\n", "meta.parts:", meta.parts);
-	printf(TAB "%-20s%u\n", "remainder:", remainder);
+	printf(TAB "%-20s%lu\n", "file size:", size);
 	printf(TAB "%-20s%u\n", "block_size:", block_size);
+	printf(TAB "%-20s%lu\n", "sizeof(metadata):", sizeof(metadata));
+	printf(TAB "%-20s%u\n", "meta.parts:", meta.parts);
+
+	printf("\n" TAB "%-20s%u\n", "remainder:", remainder);
 	printf(TAB "%-20s%d\n", "BUFFER_SIZE:", BUFFER_SIZE);
 	printf(TAB "%-20s%u\n", "block_reads:", block_reads);
 	printf(TAB "%-20s%u\n", "block_remainder:", block_remainder);
 #endif
+	if(meta.parts > MAX_SAFE_METAPARTS){
+		char* c;
+		while(1){
+			printf("> this will divide %s into %u parts, proceed? (y/n): ", filename, meta.parts);
+			size_t size;
+			size = getline(&c, &size, stdin);
+			if(c[0] == 'y' || c[0] == 'Y'){
+				break;
+			}
+			else if(c[0] == 'n' || c[0] == 'N'){
+				printf("> exiting ascia...\n");
+				exit(EXIT_SUCCESS);
+			}
+		}
+		free(c);
+	}
 	uint32_t i = 1;
 	uint32_t R, W;
 	char output_filename[MAX_FILENAME];
@@ -151,10 +172,17 @@ void split(const char* filename, uint32_t block_size){
 
 void join(char* filename){
 	char* ext = strrchr(filename, '.');
-	if(strncmp(ext, ".part", sizeof(".part")) == 0){
+	if(strncmp(ext, ".part", sizeof(".part") - 1) == 0){
 		filename[ext - filename] = '\0'; // remove extension
 	}
 	char filename_full[MAX_FILENAME];
+	// check file exists
+	sprintf(filename_full, "%s.part1", filename);
+	if(access(filename_full, R_OK | W_OK) == -1){
+		fprintf(stderr, "ERROR: could not open [%s] (%s)\n", filename_full, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	// create output file
 	sprintf(filename_full, "%s_rejoined", filename);
 	FILE* file_full = fopen(filename_full, "w");
 	if(file_full == NULL){
@@ -165,6 +193,7 @@ void join(char* filename){
 	uint32_t i = 1, R;
 	char filename_part[MAX_FILENAME];
 	char buffer[BUFFER_SIZE];
+	// join parts
 	do{
 		sprintf(filename_part, "%s.part%d", filename, i);
 		FILE* file_part = fopen(filename_part, "r");
@@ -190,6 +219,11 @@ void join(char* filename){
 	if(strcmp(meta.MD5, get_MD5(filename_full)) != 0){
 		fprintf(stderr, "ERROR: MD5 of resulting file doesn't match\n");
 		exit(EXIT_FAILURE);
+	}
+	// delete parts
+	for(uint32_t p = 1;p <= i;p++){
+		sprintf(filename_full, "%s.part%d", filename, p);
+		remove(filename_full);
 	}
 }
 
